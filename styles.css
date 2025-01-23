@@ -1,0 +1,228 @@
+/*
+
+This CSS file will be included with your plugin, and
+available in the app when your plugin is enabled.
+
+If your plugin does not need CSS, delete this file.
+
+*/
+
+.tts-status-bar-item {
+	padding: 0 8px;
+	display: flex;
+	align-items: center;
+	gap: 2px;
+	font-size: 12px;
+	color: var(--text-muted);
+}
+
+/* Remove the speaker icon */
+.tts-status-bar-item::before {
+	content: none;
+}
+
+.tts-status-bar-item:hover {
+	color: var(--interactive-accent);
+}
+
+/* Playback controls */
+.tts-control-button {
+	opacity: 0.6;
+	cursor: pointer;
+	padding: 0 4px;
+	color: var(--text-muted);
+	display: inline-flex;
+	align-items: center;
+	font-size: 14px;
+	position: relative;
+}
+
+.tts-control-button:hover {
+	opacity: 1;
+	color: var(--text-normal);
+}
+
+.tts-control-button svg {
+	width: 14px;
+	height: 14px;
+	stroke-width: 2.5px;
+}
+
+/* Base highlight styles */
+.tts-highlight {
+	transition: all 0.2s ease;
+}
+
+/* Background highlight style */
+.tts-highlight-background {
+	border-radius: 3px;
+}
+
+/* Underline highlight style */
+.tts-highlight-underline {
+	border-bottom-width: 2px;
+	border-bottom-style: solid;
+}
+
+/* Box highlight style */
+.tts-highlight-box {
+	border: 2px solid;
+	border-radius: 3px;
+}
+
+/* Paragraph styles */
+.tts-highlighted-paragraph {
+	padding: 2px 0;
+}
+
+/* Sentence styles */
+.tts-highlighted-sentence {
+	padding: 1px 0;
+}
+
+/* Word styles */
+.tts-highlighted-word {
+	padding: 0 1px;
+	font-weight: 500;
+}
+
+/* Animation classes */
+.tts-animate {
+	transition: all 0.3s ease;
+}
+
+.tts-animate-fast {
+	transition: all 0.1s ease;
+}
+
+/* Dark theme adjustments */
+.theme-dark .tts-highlight-background {
+	opacity: 0.8;
+}
+
+.tts-report-container {
+	padding: 16px;
+	margin-top: 24px;
+	border-radius: 8px;
+	background-color: var(--background-secondary);
+}
+
+.tts-report-container p {
+	margin: 0 0 8px 0;
+	color: var(--text-muted);
+}
+
+.tts-report-link {
+	color: var(--text-accent);
+	text-decoration: none;
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+}
+
+.tts-report-link:hover {
+	text-decoration: underline;
+}
+
+/* Tooltips */
+.tts-control-button[data-tooltip]:hover::after {
+	content: attr(data-tooltip);
+	position: absolute;
+	bottom: 100%;
+	left: 50%;
+	transform: translateX(-50%);
+	padding: 4px 8px;
+	background-color: var(--background-modifier-hover);
+	color: var(--text-normal);
+	border-radius: 4px;
+	font-size: 12px;
+	white-space: nowrap;
+	z-index: var(--layer-tooltip);
+	margin-bottom: 4px;
+	pointer-events: none;
+}
+
+/* Pause overlay for ribbon icon */
+.tts-pause-overlay {
+	position: absolute;
+	top: 0;
+	right: 0;
+	background-color: var(--background-secondary);
+	border-radius: 50%;
+	width: 12px;
+	height: 12px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	font-size: 8px;
+}
+
+.tts-pause-overlay::before {
+	content: "⏸";
+	color: var(--text-normal);
+}
+
+/* Loading spinner */
+@keyframes rotate {
+	from {
+		transform: rotate(0deg);
+	}
+	to {
+		transform: rotate(360deg);
+	}
+}
+
+.tts-loading-spinner {
+	animation: rotate 1s linear infinite;
+	display: inline-block;
+	opacity: 0.6;
+}
+
+.tts-loading-spinner svg {
+	width: 14px;
+	height: 14px;
+	stroke-width: 2px;
+}
+
+/* Loading dots animation */
+@keyframes loadingWave {
+	0%,
+	100% {
+		transform: translateY(0px);
+	}
+	25% {
+		transform: translateY(-2px);
+	}
+	75% {
+		transform: translateY(2px);
+	}
+}
+
+.tts-loading-dots {
+	display: flex;
+	align-items: center;
+	gap: 2px;
+	padding: 0 2px;
+}
+
+.tts-loading-dots span {
+	width: 3px;
+	height: 3px;
+	border-radius: 50%;
+	background-color: currentColor;
+	opacity: 0.8;
+}
+
+.tts-loading-dots span:nth-child(1) {
+	animation: loadingWave 1s ease-in-out infinite;
+}
+
+.tts-loading-dots span:nth-child(2) {
+	animation: loadingWave 1s ease-in-out infinite;
+	animation-delay: 0.2s;
+}
+
+.tts-loading-dots span:nth-child(3) {
+	animation: loadingWave 1s ease-in-out infinite;
+	animation-delay: 0.4s;
+}
