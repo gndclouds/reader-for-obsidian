@@ -1,10 +1,10 @@
 {
-	"id": "obsidian-text-to-speech",
-	"name": "Obsidian Reader",
+	"id": "reader-for-obsidian",
+	"name": "Reader for Obsidian",
 	"version": "1.0.0",
 	"minAppVersion": "0.15.0",
-	"description": "A plugin that adds text-to-speech capabilities to Obsidian notes",
-	"author": "Your Name",
+	"description": "A text-to-speech plugin for Obsidian that provides a seamless reading experience with multiple voice service options and text highlighting features.",
+	"author": "gndclouds",
 	"isDesktopOnly": true,
-	"authorUrl": "https://github.com/yourusername"
+	"authorUrl": "https://github.com/gndclouds"
 }

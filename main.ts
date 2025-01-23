@@ -49,6 +49,25 @@ const DEFAULT_SETTINGS: TextToSpeechSettings = {
 	highlightAnimation: true,
 };
 
+interface EditorField {
+	provides?: {
+		is?: {
+			decorations?: boolean;
+		};
+	};
+}
+
+interface EditorHighlight {
+	from: any; // Position
+	to: any; // Position
+	css: string;
+}
+
+interface ExtendedEditor extends Editor {
+	addHighlight(highlight: EditorHighlight): any;
+	removeHighlight(highlight: any): void;
+}
+
 export default class TextToSpeechPlugin extends Plugin {
 	settings: TextToSpeechSettings;
 	private speaking: boolean = false;
@@ -62,6 +81,7 @@ export default class TextToSpeechPlugin extends Plugin {
 	private paragraphs: string[] = [];
 	private currentAudio: HTMLAudioElement | null = null;
 	private isLoading: boolean = false;
+	private wordHighlightInterval: number | null = null;
 
 	async onload() {
 		await this.loadSettings();
@@ -357,11 +377,21 @@ export default class TextToSpeechPlugin extends Plugin {
 
 			utterance.onerror = (event) => {
 				console.error("Speech synthesis error:", event);
-				if (event.error === "interrupted") {
+				if (
+					event.error === "interrupted" ||
+					event.error === "canceled"
+				) {
 					// Don't show error for intentional interruptions
 					return;
 				}
-				new Notice("Error during speech synthesis");
+				if (event.error === "synthesis-failed") {
+					// Handle synthesis failure by trying to continue with next paragraph
+					console.log("Synthesis failed, attempting next paragraph");
+					this.currentParagraphIndex++;
+					processNextParagraph();
+					return;
+				}
+				new Notice(`Speech synthesis error: ${event.error}`);
 			};
 
 			// Handle word boundaries for highlighting
@@ -469,6 +499,14 @@ export default class TextToSpeechPlugin extends Plugin {
 				audio.onplay = () => {
 					this.speaking = true;
 					this.updateStatusBar("");
+
+					// Start word highlighting if enabled
+					if (
+						this.settings.highlightEnabled &&
+						this.settings.highlightWord
+					) {
+						this.startWordHighlighting(paragraph);
+					}
 				};
 
 				audio.onpause = () => {
@@ -576,6 +614,14 @@ export default class TextToSpeechPlugin extends Plugin {
 				audio.onplay = () => {
 					this.speaking = true;
 					this.updateStatusBar("");
+
+					// Start word highlighting if enabled
+					if (
+						this.settings.highlightEnabled &&
+						this.settings.highlightWord
+					) {
+						this.startWordHighlighting(paragraph);
+					}
 				};
 
 				audio.onpause = () => {
@@ -635,7 +681,7 @@ export default class TextToSpeechPlugin extends Plugin {
 				css = `border-bottom: 2px solid ${color}; ${transition}`;
 				break;
 			case "box":
-				css = `border: 2px solid ${color}; border-radius: 3px; ${transition}`;
+				css = `box-shadow: 0 0 0 1px ${color}; border-radius: 3px; ${transition}`;
 				break;
 			default:
 				css = `background-color: ${color}; border-radius: 3px; ${transition}`;
@@ -646,82 +692,111 @@ export default class TextToSpeechPlugin extends Plugin {
 	}
 
 	private highlightParagraph(paragraphIndex: number) {
-		console.log("Starting highlightParagraph with index:", paragraphIndex);
-
 		if (
 			!this.settings.highlightEnabled ||
 			!this.settings.highlightParagraph
 		) {
-			console.log("Highlighting disabled, returning early");
 			return;
 		}
 
 		this.clearHighlights();
 
 		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-		if (!view) {
-			console.log("No active view found");
-			return;
-		}
+		if (!view) return;
 
 		const editor = view.editor;
 		const text = editor.getValue();
-		console.log("Got editor text, length:", text.length);
-
 		const paragraphs = text.split(/\n\s*\n/);
-		console.log("Split into paragraphs, count:", paragraphs.length);
 
-		if (paragraphIndex >= paragraphs.length) {
-			console.log("Paragraph index out of bounds");
-			return;
-		}
+		if (paragraphIndex >= paragraphs.length) return;
 
 		let startOffset = 0;
 		for (let i = 0; i < paragraphIndex; i++) {
 			startOffset += paragraphs[i].length + 2;
 		}
-		console.log("Calculated startOffset:", startOffset);
 
 		const startPos = editor.offsetToPos(startOffset);
 		const endPos = editor.offsetToPos(
 			startOffset + paragraphs[paragraphIndex].length
 		);
-		console.log("Position range:", startPos, "to", endPos);
-
 		const style = this.getHighlightStyle(this.settings.paragraphColor);
-		console.log("Generated style:", style);
 
 		try {
-			// Try to get the CodeMirror editor instance
 			const cmEditor = (editor as any).cm;
-			console.log("Got CM editor:", Boolean(cmEditor));
+			if (!cmEditor) {
+				console.warn("CodeMirror editor instance not found");
+				return;
+			}
 
-			if (cmEditor) {
-				// Use CodeMirror's markText
+			if (typeof cmEditor.markText === "function") {
+				// CM5
 				this.currentParagraphEl = cmEditor.markText(startPos, endPos, {
 					css: style.css,
 				});
 			} else {
-				// Fallback to a simpler method if CodeMirror is not available
-				console.log(
-					"No CodeMirror editor found, using fallback method"
-				);
-				const marker = {
-					clear: () => {
-						console.log("Clearing highlight (fallback method)");
-					},
-				};
-				this.currentParagraphEl = marker;
+				// CM6
+				const editorView = cmEditor;
+				const highlightClass = "tts-highlighted-paragraph";
+
+				// Add the style to the document if it doesn't exist
+				const styleEl =
+					document.getElementById("tts-highlight-styles") ||
+					(() => {
+						const el = document.createElement("style");
+						el.id = "tts-highlight-styles";
+						document.head.appendChild(el);
+						return el;
+					})();
+				styleEl.textContent = `.${highlightClass} { ${style.css} }`;
+
+				// Create a decoration for the paragraph
+				const fromPos =
+					editorView.state.doc.line(startPos.line).from + startPos.ch;
+				const toPos =
+					editorView.state.doc.line(endPos.line).from + endPos.ch;
+
+				try {
+					const decorationField = editorView.state.field(
+						(editorView.state as any).decorationField
+					);
+					if (decorationField) {
+						const decoration = decorationField.createDeco({
+							from: fromPos,
+							to: toPos,
+							class: highlightClass,
+						});
+
+						editorView.dispatch({
+							effects: [decoration],
+						});
+
+						this.currentParagraphEl = {
+							clear: () => {
+								editorView.dispatch({
+									effects: [decoration.map(() => null)],
+								});
+							},
+						};
+						return;
+					}
+				} catch (decorationError) {
+					console.warn("Error applying decoration:", decorationError);
+				}
+
+				// Fallback to DOM-based highlighting
+				const editorEl = view.contentEl.querySelector(".cm-content");
+				if (editorEl) {
+					const mark = document.createElement("mark");
+					mark.className = highlightClass;
+					editorEl.appendChild(mark);
+
+					this.currentParagraphEl = {
+						clear: () => mark.remove(),
+					};
+				}
 			}
 		} catch (error) {
-			console.error("Error applying paragraph highlight:", error);
-			console.error("Error details:", {
-				paragraphIndex,
-				startPos,
-				endPos,
-				style,
-				text: paragraphs[paragraphIndex],
-			});
+			console.warn("Error applying paragraph highlight:", error);
 		}
 	}
 
@@ -758,16 +833,79 @@ export default class TextToSpeechPlugin extends Plugin {
 
 		// Apply the highlight style
 		const style = this.getHighlightStyle(this.settings.wordColor);
+
 		try {
 			const cmEditor = (editor as any).cm;
-			if (cmEditor) {
+			if (!cmEditor) {
+				console.warn("CodeMirror editor instance not found");
+				return;
+			}
+
+			if (typeof cmEditor.markText === "function") {
+				// CM5
 				this.currentWordEl = cmEditor.markText(from, to, {
 					css: style.css,
 					clearOnEnter: false,
 				});
+			} else {
+				// CM6
+				const editorView = cmEditor;
+
+				// Create a decoration range
+				const fromPos =
+					editorView.state.doc.line(from.line).from + from.ch;
+				const toPos = editorView.state.doc.line(to.line).from + to.ch;
+
+				// Create a decoration using the StateEffect API
+				const highlightEffect = editorView.state.effect.define();
+				const transaction = editorView.state.update({
+					effects: highlightEffect.of({
+						from: fromPos,
+						to: toPos,
+						spec: {
+							attributes: { style: style.css },
+						},
+					}),
+				});
+
+				editorView.dispatch(transaction);
+
+				// Store reference for cleanup
+				this.currentWordEl = {
+					clear: () => {
+						const removeEffect = editorView.state.effect.define();
+						editorView.dispatch(
+							editorView.state.update({
+								effects: removeEffect.of(null),
+							})
+						);
+					},
+				};
 			}
 		} catch (error) {
-			console.error("Error applying word highlight:", error);
+			console.warn("Error applying word highlight:", error);
+
+			// If all else fails, try using selection highlight
+			try {
+				const selection = {
+					from: editor.offsetToPos(startOffset + wordStart),
+					to: editor.offsetToPos(
+						startOffset + wordStart + wordLength
+					),
+				};
+				editor.setSelection(selection.from, selection.to);
+
+				this.currentWordEl = {
+					clear: () => {
+						editor.setSelection(editor.getCursor());
+					},
+				};
+			} catch (selectionError) {
+				console.warn(
+					"Error applying selection highlight:",
+					selectionError
+				);
+			}
 		}
 	}
 
@@ -803,18 +941,83 @@ export default class TextToSpeechPlugin extends Plugin {
 		const to = editor.offsetToPos(
 			startOffset + sentenceStart + sentenceLength
 		);
-
 		const style = this.getHighlightStyle(this.settings.sentenceColor);
+
 		try {
-			// Access CodeMirror editor instance
 			const cmEditor = (editor as any).cm;
-			if (cmEditor) {
+			if (!cmEditor) {
+				console.warn("CodeMirror editor instance not found");
+				return;
+			}
+
+			if (typeof cmEditor.markText === "function") {
+				// CM5
 				this.currentSentenceEl = cmEditor.markText(from, to, {
 					css: style.css,
 				});
+			} else {
+				// CM6
+				const editorView = cmEditor;
+				const highlightClass = "tts-highlighted-sentence";
+
+				// Add the style to the document if it doesn't exist
+				const styleEl =
+					document.getElementById("tts-highlight-styles") ||
+					(() => {
+						const el = document.createElement("style");
+						el.id = "tts-highlight-styles";
+						document.head.appendChild(el);
+						return el;
+					})();
+				styleEl.textContent = `.${highlightClass} { ${style.css} }`;
+
+				// Create a decoration for the sentence
+				const fromPos =
+					editorView.state.doc.line(from.line).from + from.ch;
+				const toPos = editorView.state.doc.line(to.line).from + to.ch;
+
+				try {
+					const decorationField = editorView.state.field(
+						(editorView.state as any).decorationField
+					);
+					if (decorationField) {
+						const decoration = decorationField.createDeco({
+							from: fromPos,
+							to: toPos,
+							class: highlightClass,
+						});
+
+						editorView.dispatch({
+							effects: [decoration],
+						});
+
+						this.currentSentenceEl = {
+							clear: () => {
+								editorView.dispatch({
+									effects: [decoration.map(() => null)],
+								});
+							},
+						};
+						return;
+					}
+				} catch (decorationError) {
+					console.warn("Error applying decoration:", decorationError);
+				}
+
+				// Fallback to DOM-based highlighting
+				const editorEl = view.contentEl.querySelector(".cm-content");
+				if (editorEl) {
+					const mark = document.createElement("mark");
+					mark.className = highlightClass;
+					editorEl.appendChild(mark);
+
+					this.currentSentenceEl = {
+						clear: () => mark.remove(),
+					};
+				}
 			}
 		} catch (error) {
-			console.error("Error applying sentence highlight:", error);
+			console.warn("Error applying sentence highlight:", error);
 		}
 	}
 
@@ -830,6 +1033,10 @@ export default class TextToSpeechPlugin extends Plugin {
 		if (this.currentSentenceEl) {
 			this.currentSentenceEl.clear();
 			this.currentSentenceEl = null;
+		}
+		if (this.wordHighlightInterval !== null) {
+			window.clearInterval(this.wordHighlightInterval);
+			this.wordHighlightInterval = null;
 		}
 	}
 
@@ -1113,6 +1320,43 @@ export default class TextToSpeechPlugin extends Plugin {
 		const voices = this.speechSynthesis.getVoices();
 		const defaultVoice = voices.find((v) => v.default) || voices[0];
 		return defaultVoice?.voiceURI || "default";
+	}
+
+	private startWordHighlighting(text: string) {
+		const words = text.split(/\s+/);
+		let currentIndex = 0;
+
+		// Clear any existing interval
+		if (this.wordHighlightInterval !== null) {
+			window.clearInterval(this.wordHighlightInterval);
+		}
+
+		// Calculate average word duration based on text length and playback speed
+		const averageWordDuration =
+			(text.length / words.length) * (60 / this.settings.playbackSpeed);
+
+		this.wordHighlightInterval = window.setInterval(() => {
+			if (!this.speaking || currentIndex >= words.length) {
+				if (this.wordHighlightInterval !== null) {
+					window.clearInterval(this.wordHighlightInterval);
+					this.wordHighlightInterval = null;
+				}
+				return;
+			}
+
+			// Find the word's position in the original text
+			let wordStart = 0;
+			for (let i = 0; i < currentIndex; i++) {
+				wordStart += words[i].length + 1; // +1 for the space
+			}
+
+			this.highlightWord(
+				this.currentParagraphIndex,
+				wordStart,
+				words[currentIndex].length
+			);
+			currentIndex++;
+		}, averageWordDuration);
 	}
 }
 
@@ -1418,8 +1662,8 @@ class TextToSpeechSettingTab extends PluginSettingTab {
 		);
 
 		const reportLink = reportContainer.createEl("a", {
-			text: "gndclouds/obsidian-reader",
-			href: "https://github.com/gndclouds/obsidian-reader/issues",
+			text: "gndclouds/reader-for-obsidian",
+			href: "https://github.com/gndclouds/reader-for-obsidian/issues",
 		});
 		reportLink.addClass("tts-report-link");
 	}
