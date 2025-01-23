@@ -18,15 +18,11 @@ interface TextToSpeechSettings {
 	pitch: number;
 	volume: number;
 	highlightEnabled: boolean;
-	highlightParagraph: boolean;
-	highlightSentence: boolean;
 	highlightWord: boolean;
-	paragraphColor: string;
-	sentenceColor: string;
 	wordColor: string;
 	elevenLabsApiKey: string;
 	openAIApiKey: string;
-	highlightStyle: "background" | "underline" | "box";
+	highlightStyle: "background" | "underline";
 	highlightAnimation: boolean;
 }
 
@@ -37,15 +33,11 @@ const DEFAULT_SETTINGS: TextToSpeechSettings = {
 	pitch: 1.0,
 	volume: 1.0,
 	highlightEnabled: true,
-	highlightParagraph: true,
-	highlightSentence: true,
 	highlightWord: true,
-	paragraphColor: "rgba(255, 255, 0, 0.2)",
-	sentenceColor: "rgba(255, 255, 0, 0.3)",
-	wordColor: "rgba(255, 255, 0, 0.5)",
+	wordColor: "#1f26ea",
 	elevenLabsApiKey: "",
 	openAIApiKey: "",
-	highlightStyle: "background",
+	highlightStyle: "underline",
 	highlightAnimation: true,
 };
 
@@ -501,11 +493,12 @@ export default class TextToSpeechPlugin extends Plugin {
 					this.updateStatusBar("");
 
 					// Start word highlighting if enabled
-					if (
-						this.settings.highlightEnabled &&
-						this.settings.highlightWord
-					) {
-						this.startWordHighlighting(paragraph);
+					if (this.settings.highlightEnabled) {
+						this.highlightWord(
+							this.currentParagraphIndex,
+							0,
+							paragraph.length
+						);
 					}
 				};
 
@@ -529,11 +522,6 @@ export default class TextToSpeechPlugin extends Plugin {
 					this.isLoading = false;
 					this.updateStatusBar("");
 				};
-
-				// Handle word highlighting if enabled
-				if (this.settings.highlightEnabled) {
-					this.highlightParagraph(this.currentParagraphIndex);
-				}
 
 				this.currentAudio = audio;
 				await audio.play();
@@ -616,11 +604,12 @@ export default class TextToSpeechPlugin extends Plugin {
 					this.updateStatusBar("");
 
 					// Start word highlighting if enabled
-					if (
-						this.settings.highlightEnabled &&
-						this.settings.highlightWord
-					) {
-						this.startWordHighlighting(paragraph);
+					if (this.settings.highlightEnabled) {
+						this.highlightWord(
+							this.currentParagraphIndex,
+							0,
+							paragraph.length
+						);
 					}
 				};
 
@@ -645,11 +634,6 @@ export default class TextToSpeechPlugin extends Plugin {
 					this.updateStatusBar("");
 				};
 
-				// Handle word highlighting if enabled
-				if (this.settings.highlightEnabled) {
-					this.highlightParagraph(this.currentParagraphIndex);
-				}
-
 				this.currentAudio = audio;
 				await audio.play();
 			} catch (error) {
@@ -673,131 +657,23 @@ export default class TextToSpeechPlugin extends Plugin {
 			? "transition: all 0.3s ease;"
 			: "";
 
+		// Ensure we're using the color from settings
+		const highlightColor = this.settings.wordColor;
+		console.log("Using highlight color from settings:", highlightColor);
+
 		switch (this.settings.highlightStyle) {
 			case "background":
-				css = `background-color: ${color}; border-radius: 3px; ${transition}`;
+				css = `background-color: ${highlightColor}; border-radius: 3px; ${transition}`;
 				break;
 			case "underline":
-				css = `border-bottom: 2px solid ${color}; ${transition}`;
-				break;
-			case "box":
-				css = `box-shadow: 0 0 0 1px ${color}; border-radius: 3px; ${transition}`;
+				css = `border-bottom: 2px solid ${highlightColor}; ${transition}`;
 				break;
 			default:
-				css = `background-color: ${color}; border-radius: 3px; ${transition}`;
+				css = `border-bottom: 2px solid ${highlightColor}; ${transition}`;
 		}
 
 		console.log("Generated CSS:", css);
 		return { css };
-	}
-
-	private highlightParagraph(paragraphIndex: number) {
-		if (
-			!this.settings.highlightEnabled ||
-			!this.settings.highlightParagraph
-		) {
-			return;
-		}
-
-		this.clearHighlights();
-
-		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-		if (!view) return;
-
-		const editor = view.editor;
-		const text = editor.getValue();
-		const paragraphs = text.split(/\n\s*\n/);
-
-		if (paragraphIndex >= paragraphs.length) return;
-
-		let startOffset = 0;
-		for (let i = 0; i < paragraphIndex; i++) {
-			startOffset += paragraphs[i].length + 2;
-		}
-
-		const startPos = editor.offsetToPos(startOffset);
-		const endPos = editor.offsetToPos(
-			startOffset + paragraphs[paragraphIndex].length
-		);
-		const style = this.getHighlightStyle(this.settings.paragraphColor);
-
-		try {
-			const cmEditor = (editor as any).cm;
-			if (!cmEditor) {
-				console.warn("CodeMirror editor instance not found");
-				return;
-			}
-
-			if (typeof cmEditor.markText === "function") {
-				// CM5
-				this.currentParagraphEl = cmEditor.markText(startPos, endPos, {
-					css: style.css,
-				});
-			} else {
-				// CM6
-				const editorView = cmEditor;
-				const highlightClass = "tts-highlighted-paragraph";
-
-				// Add the style to the document if it doesn't exist
-				const styleEl =
-					document.getElementById("tts-highlight-styles") ||
-					(() => {
-						const el = document.createElement("style");
-						el.id = "tts-highlight-styles";
-						document.head.appendChild(el);
-						return el;
-					})();
-				styleEl.textContent = `.${highlightClass} { ${style.css} }`;
-
-				// Create a decoration for the paragraph
-				const fromPos =
-					editorView.state.doc.line(startPos.line).from + startPos.ch;
-				const toPos =
-					editorView.state.doc.line(endPos.line).from + endPos.ch;
-
-				try {
-					const decorationField = editorView.state.field(
-						(editorView.state as any).decorationField
-					);
-					if (decorationField) {
-						const decoration = decorationField.createDeco({
-							from: fromPos,
-							to: toPos,
-							class: highlightClass,
-						});
-
-						editorView.dispatch({
-							effects: [decoration],
-						});
-
-						this.currentParagraphEl = {
-							clear: () => {
-								editorView.dispatch({
-									effects: [decoration.map(() => null)],
-								});
-							},
-						};
-						return;
-					}
-				} catch (decorationError) {
-					console.warn("Error applying decoration:", decorationError);
-				}
-
-				// Fallback to DOM-based highlighting
-				const editorEl = view.contentEl.querySelector(".cm-content");
-				if (editorEl) {
-					const mark = document.createElement("mark");
-					mark.className = highlightClass;
-					editorEl.appendChild(mark);
-
-					this.currentParagraphEl = {
-						clear: () => mark.remove(),
-					};
-				}
-			}
-		} catch (error) {
-			console.warn("Error applying paragraph highlight:", error);
-		}
 	}
 
 	private highlightWord(
@@ -914,111 +790,8 @@ export default class TextToSpeechPlugin extends Plugin {
 		sentenceStart: number,
 		sentenceLength: number
 	) {
-		if (
-			!this.settings.highlightEnabled ||
-			!this.settings.highlightSentence
-		) {
-			return;
-		}
-
-		if (this.currentSentenceEl) {
-			this.currentSentenceEl.clear();
-		}
-
-		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-		if (!view) return;
-
-		const editor = view.editor;
-		const text = editor.getValue();
-		const paragraphs = text.split(/\n\s*\n/);
-
-		let startOffset = 0;
-		for (let i = 0; i < paragraphIndex; i++) {
-			startOffset += paragraphs[i].length + 2;
-		}
-
-		const from = editor.offsetToPos(startOffset + sentenceStart);
-		const to = editor.offsetToPos(
-			startOffset + sentenceStart + sentenceLength
-		);
-		const style = this.getHighlightStyle(this.settings.sentenceColor);
-
-		try {
-			const cmEditor = (editor as any).cm;
-			if (!cmEditor) {
-				console.warn("CodeMirror editor instance not found");
-				return;
-			}
-
-			if (typeof cmEditor.markText === "function") {
-				// CM5
-				this.currentSentenceEl = cmEditor.markText(from, to, {
-					css: style.css,
-				});
-			} else {
-				// CM6
-				const editorView = cmEditor;
-				const highlightClass = "tts-highlighted-sentence";
-
-				// Add the style to the document if it doesn't exist
-				const styleEl =
-					document.getElementById("tts-highlight-styles") ||
-					(() => {
-						const el = document.createElement("style");
-						el.id = "tts-highlight-styles";
-						document.head.appendChild(el);
-						return el;
-					})();
-				styleEl.textContent = `.${highlightClass} { ${style.css} }`;
-
-				// Create a decoration for the sentence
-				const fromPos =
-					editorView.state.doc.line(from.line).from + from.ch;
-				const toPos = editorView.state.doc.line(to.line).from + to.ch;
-
-				try {
-					const decorationField = editorView.state.field(
-						(editorView.state as any).decorationField
-					);
-					if (decorationField) {
-						const decoration = decorationField.createDeco({
-							from: fromPos,
-							to: toPos,
-							class: highlightClass,
-						});
-
-						editorView.dispatch({
-							effects: [decoration],
-						});
-
-						this.currentSentenceEl = {
-							clear: () => {
-								editorView.dispatch({
-									effects: [decoration.map(() => null)],
-								});
-							},
-						};
-						return;
-					}
-				} catch (decorationError) {
-					console.warn("Error applying decoration:", decorationError);
-				}
-
-				// Fallback to DOM-based highlighting
-				const editorEl = view.contentEl.querySelector(".cm-content");
-				if (editorEl) {
-					const mark = document.createElement("mark");
-					mark.className = highlightClass;
-					editorEl.appendChild(mark);
-
-					this.currentSentenceEl = {
-						clear: () => mark.remove(),
-					};
-				}
-			}
-		} catch (error) {
-			console.warn("Error applying sentence highlight:", error);
-		}
+		// Since we're removing sentence highlighting, just return
+		return;
 	}
 
 	private clearHighlights() {
@@ -1539,7 +1312,7 @@ class TextToSpeechSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("Enable Highlighting")
-			.setDesc("Toggle all text highlighting features")
+			.setDesc("Toggle word highlighting feature")
 			.addToggle((toggle) =>
 				toggle
 					.setValue(this.plugin.settings.highlightEnabled)
@@ -1552,48 +1325,6 @@ class TextToSpeechSettingTab extends PluginSettingTab {
 			);
 
 		if (this.plugin.settings.highlightEnabled) {
-			// Paragraph highlighting
-			new Setting(containerEl)
-				.setName("Highlight Paragraphs")
-				.setDesc("Highlight the current paragraph being read")
-				.addToggle((toggle) =>
-					toggle
-						.setValue(this.plugin.settings.highlightParagraph)
-						.onChange(async (value) => {
-							this.plugin.settings.highlightParagraph = value;
-							await this.plugin.saveSettings();
-						})
-				)
-				.addColorPicker((color) =>
-					color
-						.setValue(this.plugin.settings.paragraphColor)
-						.onChange(async (value) => {
-							this.plugin.settings.paragraphColor = value;
-							await this.plugin.saveSettings();
-						})
-				);
-
-			// Sentence highlighting
-			new Setting(containerEl)
-				.setName("Highlight Sentences")
-				.setDesc("Highlight the current sentence being read")
-				.addToggle((toggle) =>
-					toggle
-						.setValue(this.plugin.settings.highlightSentence)
-						.onChange(async (value) => {
-							this.plugin.settings.highlightSentence = value;
-							await this.plugin.saveSettings();
-						})
-				)
-				.addColorPicker((color) =>
-					color
-						.setValue(this.plugin.settings.sentenceColor)
-						.onChange(async (value) => {
-							this.plugin.settings.sentenceColor = value;
-							await this.plugin.saveSettings();
-						})
-				);
-
 			// Word highlighting
 			new Setting(containerEl)
 				.setName("Highlight Words")
@@ -1622,16 +1353,14 @@ class TextToSpeechSettingTab extends PluginSettingTab {
 				.addDropdown((dropdown) =>
 					dropdown
 						.addOptions({
-							background: "Background Color",
 							underline: "Underline",
-							box: "Box Around Text",
+							background: "Background Color",
 						})
 						.setValue(this.plugin.settings.highlightStyle)
 						.onChange(async (value) => {
 							this.plugin.settings.highlightStyle = value as
 								| "background"
-								| "underline"
-								| "box";
+								| "underline";
 							await this.plugin.saveSettings();
 						})
 				);
