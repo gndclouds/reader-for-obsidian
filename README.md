@@ -1,6 +1,6 @@
 # Note Reader
 
-A text-to-speech plugin for Obsidian that provides a seamless reading experience with multiple voice service options and text highlighting features.
+A text-to-speech plugin with multiple voice service options and text highlighting features.
 
 ## Features
 
