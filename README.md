@@ -29,6 +29,8 @@ A text-to-speech plugin for Obsidian that provides a seamless reading experience
 
 ## Usage
 
+![alt text](<gndclouds 20250123-130720-Obsidian-MAKER'S SCHEDULE MANAGER'S SCHEDULE - ObsidianDevelopment - Obsidian v1.8.1.gif>)
+
 1. Click the speaker icon in the ribbon menu or use the command palette to start reading
 2. Use the playback controls in the status bar to:
     - Play/Pause
