@@ -32,8 +32,8 @@ const DEFAULT_SETTINGS: TextToSpeechSettings = {
 	playbackSpeed: 1.0,
 	pitch: 1.0,
 	volume: 1.0,
-	highlightEnabled: true,
-	highlightWord: true,
+	highlightEnabled: false,
+	highlightWord: false,
 	wordColor: "#1f26ea",
 	elevenLabsApiKey: "",
 	openAIApiKey: "",
@@ -195,18 +195,19 @@ export default class TextToSpeechPlugin extends Plugin {
 			playPauseButton.innerHTML = `<span class="tts-loading-dots"><span></span><span></span><span></span></span>`;
 			playPauseButton.style.cursor = "not-allowed";
 		} else {
-			const isPlaying =
-				this.speaking &&
-				(this.settings.voiceService === "system"
-					? !this.speechSynthesis.paused
-					: this.currentAudio && !this.currentAudio.paused);
+			const isPaused =
+				this.settings.voiceService === "system"
+					? this.speechSynthesis.paused
+					: this.currentAudio?.paused;
 
-			playPauseButton.innerHTML = isPlaying
-				? `<svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>`
-				: `<svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>`;
+			const isPlaying = this.speaking && !isPaused;
+
+			playPauseButton.innerHTML = !isPlaying
+				? `<svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>`
+				: `<svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>`;
 		}
 
-		playPauseButton.addEventListener("click", async () => {
+		playPauseButton.addEventListener("click", async (event) => {
 			if (this.isLoading) {
 				new Notice("Please wait, audio is being generated...");
 				return;
@@ -219,27 +220,39 @@ export default class TextToSpeechPlugin extends Plugin {
 				return;
 			}
 
-			if (this.speaking) {
-				// Handle pause/resume for all services
+			// Check for Command (Mac) or Control (Windows/Linux) key
+			const isModifierKeyPressed = event.metaKey || event.ctrlKey;
+
+			if (this.speaking && !isModifierKeyPressed) {
+				// Normal click - handle pause/resume for all services
 				if (this.settings.voiceService === "system") {
 					if (this.speechSynthesis.paused) {
 						this.speechSynthesis.resume();
-						this.updateStatusBar("");
 					} else {
 						this.speechSynthesis.pause();
-						this.updateStatusBar("");
 					}
 				} else if (this.currentAudio) {
 					if (this.currentAudio.paused) {
 						await this.currentAudio.play();
-						this.updateStatusBar("");
 					} else {
 						this.currentAudio.pause();
-						this.updateStatusBar("");
 					}
 				}
+				// Update status bar immediately after state change
+				this.updateStatusBar("");
 			} else {
-				// Start new playback
+				// Either not speaking or modifier key is pressed - start new playback
+				if (this.speaking) {
+					// Stop current playback
+					if (this.settings.voiceService === "system") {
+						this.speechSynthesis.cancel();
+					} else if (this.currentAudio) {
+						this.currentAudio.pause();
+						this.currentAudio = null;
+					}
+					this.speaking = false;
+					this.clearHighlights();
+				}
 				const content = activeView.getViewData();
 				await this.speakText(content);
 			}
@@ -258,6 +271,14 @@ export default class TextToSpeechPlugin extends Plugin {
 				this.skipToParagraph("next");
 			}
 		});
+
+		// Disable navigation buttons during loading
+		if (this.isLoading) {
+			backButton.style.cursor = "not-allowed";
+			backButton.style.opacity = "0.5";
+			forwardButton.style.cursor = "not-allowed";
+			forwardButton.style.opacity = "0.5";
+		}
 	}
 
 	async speakText(text: string) {
@@ -287,18 +308,39 @@ export default class TextToSpeechPlugin extends Plugin {
 		this.updateStatusBar("");
 
 		try {
+			// Set speaking state immediately
+			this.speaking = true;
+
+			// Remove frontmatter and properties
+			let cleanText = text;
+
+			// Remove YAML frontmatter
+			cleanText = cleanText.replace(/^---\n[\s\S]*?\n---\n/, "");
+
+			// Remove Obsidian properties (lines starting with property:)
+			cleanText = cleanText
+				.split("\n")
+				.filter((line) => !line.match(/^[a-zA-Z0-9-_]+::.*$/))
+				.join("\n");
+
+			// Remove any extra newlines at the start
+			cleanText = cleanText.replace(/^\n+/, "");
+
 			// Use the selected voice service
 			switch (this.settings.voiceService) {
 				case "system":
-					await this.speakWithSystem(text);
+					await this.speakWithSystem(cleanText);
 					break;
 				case "elevenlabs":
-					await this.speakWithElevenLabs(text);
+					await this.speakWithElevenLabs(cleanText);
 					break;
 				case "openai":
-					await this.speakWithOpenAI(text);
+					await this.speakWithOpenAI(cleanText);
 					break;
 			}
+
+			// Update status bar after starting
+			this.updateStatusBar("");
 		} catch (error) {
 			console.error("Error starting speech:", error);
 			new Notice("Error starting speech. Please try again.");
@@ -312,7 +354,6 @@ export default class TextToSpeechPlugin extends Plugin {
 		// Load voices and set default
 		const loadVoices = () => {
 			const voices = this.speechSynthesis.getVoices();
-			console.log("Available voices:", voices);
 
 			// Try to find the system default voice
 			this.defaultVoice = voices.find((voice) => voice.default) || null;
@@ -352,6 +393,7 @@ export default class TextToSpeechPlugin extends Plugin {
 		const processNextParagraph = () => {
 			if (this.currentParagraphIndex >= this.paragraphs.length) {
 				this.speaking = false;
+				this.isLoading = false;
 				this.clearHighlights();
 				this.updateStatusBar("");
 				return;
@@ -366,6 +408,10 @@ export default class TextToSpeechPlugin extends Plugin {
 			if (this.defaultVoice) {
 				utterance.voice = this.defaultVoice;
 			}
+
+			// Clear loading state when speech starts
+			this.isLoading = false;
+			this.updateStatusBar("");
 
 			utterance.onerror = (event) => {
 				console.error("Speech synthesis error:", event);
@@ -390,21 +436,28 @@ export default class TextToSpeechPlugin extends Plugin {
 			utterance.onboundary = (event) => {
 				if (event.name === "word" && this.settings.highlightEnabled) {
 					const wordIndex = event.charIndex;
-					const wordLength = event.charLength || 1;
+					let wordLength = event.charLength || 1;
 
-					// Get the word being spoken
-					const word = paragraph.substring(
-						wordIndex,
-						wordIndex + wordLength
-					);
+					// Get the word being spoken and its context
+					const text = paragraph.substring(wordIndex);
 
-					// Only highlight if it's an actual word (not whitespace)
-					if (word.trim().length > 0) {
-						this.highlightWord(
-							this.currentParagraphIndex,
-							wordIndex,
-							wordLength
-						);
+					// Find the complete word boundaries
+					const wordMatch = text.match(/^\S+/);
+					if (wordMatch) {
+						wordLength = wordMatch[0].length;
+
+						// Only highlight if it's an actual word (not whitespace or punctuation)
+						if (wordMatch[0].trim().length > 0) {
+							// Add a small delay to ensure synchronization with speech
+							setTimeout(() => {
+								this.highlightWord(
+									this.currentParagraphIndex,
+									wordIndex,
+									wordLength,
+									0
+								);
+							}, 0);
+						}
 					}
 				}
 			};
@@ -497,7 +550,8 @@ export default class TextToSpeechPlugin extends Plugin {
 						this.highlightWord(
 							this.currentParagraphIndex,
 							0,
-							paragraph.length
+							paragraph.length,
+							0
 						);
 					}
 				};
@@ -608,7 +662,8 @@ export default class TextToSpeechPlugin extends Plugin {
 						this.highlightWord(
 							this.currentParagraphIndex,
 							0,
-							paragraph.length
+							paragraph.length,
+							0
 						);
 					}
 				};
@@ -676,10 +731,86 @@ export default class TextToSpeechPlugin extends Plugin {
 		return { css };
 	}
 
+	private findParagraphPosition(
+		text: string,
+		targetParagraphIndex: number
+	): { start: number; end: number } {
+		const lines = text.split("\n");
+		let offset = 0;
+		let paragraphCount = 0;
+		let paragraphStart = 0;
+		let inParagraph = false;
+		let currentText = "";
+
+		console.log(`[Debug] Finding paragraph ${targetParagraphIndex}`);
+		console.log(`[Debug] Total lines:`, lines.length);
+
+		for (let i = 0; i < lines.length; i++) {
+			const line = lines[i];
+			const trimmedLine = line.trim();
+
+			// Track the current text for debugging
+			currentText = text.substring(0, offset);
+
+			console.log(`[Debug] Line ${i}:`, {
+				raw: line,
+				trimmed: trimmedLine,
+				offset,
+				paragraphCount,
+				inParagraph,
+			});
+
+			if (trimmedLine === "") {
+				if (inParagraph) {
+					if (paragraphCount === targetParagraphIndex) {
+						console.log(`[Debug] Found paragraph end:`, {
+							start: paragraphStart,
+							end: offset,
+							text: text.substring(paragraphStart, offset),
+						});
+						return { start: paragraphStart, end: offset };
+					}
+					paragraphCount++;
+					inParagraph = false;
+				}
+			} else {
+				if (!inParagraph) {
+					inParagraph = true;
+					if (paragraphCount === targetParagraphIndex) {
+						paragraphStart = offset;
+						console.log(
+							`[Debug] Starting new paragraph at offset:`,
+							offset
+						);
+					}
+				}
+			}
+
+			// Add the line length and the newline character
+			offset += line.length + 1;
+		}
+
+		// Handle last paragraph
+		if (inParagraph && paragraphCount === targetParagraphIndex) {
+			console.log(`[Debug] Found last paragraph:`, {
+				start: paragraphStart,
+				end: offset,
+				text: text.substring(paragraphStart, offset),
+			});
+			return { start: paragraphStart, end: offset };
+		}
+
+		console.log(
+			`[Debug] No paragraph found at index ${targetParagraphIndex}`
+		);
+		return { start: 0, end: 0 };
+	}
+
 	private highlightWord(
 		paragraphIndex: number,
 		wordStart: number,
-		wordLength: number
+		wordLength: number,
+		paragraphStart: number
 	) {
 		if (!this.settings.highlightEnabled || !this.settings.highlightWord) {
 			return;
@@ -695,93 +826,51 @@ export default class TextToSpeechPlugin extends Plugin {
 
 		const editor = view.editor;
 		const text = editor.getValue();
-		const paragraphs = text.split(/\n\s*\n/);
 
-		// Calculate the offset to the current paragraph
-		let startOffset = 0;
-		for (let i = 0; i < paragraphIndex; i++) {
-			startOffset += paragraphs[i].length + 2;
+		// Calculate absolute position using the provided paragraph start
+		const absolutePosition = paragraphStart + wordStart;
+
+		console.log(`[Debug] Word highlighting:`, {
+			paragraphIndex,
+			paragraphStart,
+			wordStart,
+			absolutePosition,
+			wordText: text.substring(
+				absolutePosition,
+				absolutePosition + wordLength
+			),
+		});
+
+		// Validate position
+		if (
+			absolutePosition >= text.length ||
+			absolutePosition + wordLength > text.length
+		) {
+			console.warn("Invalid word position:", {
+				absolutePosition,
+				wordLength,
+				textLength: text.length,
+			});
+			return;
 		}
 
-		// Calculate positions for the word
-		const from = editor.offsetToPos(startOffset + wordStart);
-		const to = editor.offsetToPos(startOffset + wordStart + wordLength);
-
-		// Apply the highlight style
-		const style = this.getHighlightStyle(this.settings.wordColor);
+		// Calculate positions
+		const from = editor.offsetToPos(absolutePosition);
+		const to = editor.offsetToPos(absolutePosition + wordLength);
 
 		try {
-			const cmEditor = (editor as any).cm;
-			if (!cmEditor) {
-				console.warn("CodeMirror editor instance not found");
-				return;
-			}
+			// Use Obsidian's built-in editor API for highlighting
+			editor.setSelection(from, to);
 
-			if (typeof cmEditor.markText === "function") {
-				// CM5
-				this.currentWordEl = cmEditor.markText(from, to, {
-					css: style.css,
-					clearOnEnter: false,
-				});
-			} else {
-				// CM6
-				const editorView = cmEditor;
-
-				// Create a decoration range
-				const fromPos =
-					editorView.state.doc.line(from.line).from + from.ch;
-				const toPos = editorView.state.doc.line(to.line).from + to.ch;
-
-				// Create a decoration using the StateEffect API
-				const highlightEffect = editorView.state.effect.define();
-				const transaction = editorView.state.update({
-					effects: highlightEffect.of({
-						from: fromPos,
-						to: toPos,
-						spec: {
-							attributes: { style: style.css },
-						},
-					}),
-				});
-
-				editorView.dispatch(transaction);
-
-				// Store reference for cleanup
-				this.currentWordEl = {
-					clear: () => {
-						const removeEffect = editorView.state.effect.define();
-						editorView.dispatch(
-							editorView.state.update({
-								effects: removeEffect.of(null),
-							})
-						);
-					},
-				};
-			}
+			// Store reference for cleanup
+			this.currentWordEl = {
+				clear: () => {
+					const cursor = editor.getCursor();
+					editor.setSelection(cursor, cursor);
+				},
+			};
 		} catch (error) {
-			console.warn("Error applying word highlight:", error);
-
-			// If all else fails, try using selection highlight
-			try {
-				const selection = {
-					from: editor.offsetToPos(startOffset + wordStart),
-					to: editor.offsetToPos(
-						startOffset + wordStart + wordLength
-					),
-				};
-				editor.setSelection(selection.from, selection.to);
-
-				this.currentWordEl = {
-					clear: () => {
-						editor.setSelection(editor.getCursor());
-					},
-				};
-			} catch (selectionError) {
-				console.warn(
-					"Error applying selection highlight:",
-					selectionError
-				);
-			}
+			console.warn("Error applying highlight:", error);
 		}
 	}
 
@@ -808,7 +897,7 @@ export default class TextToSpeechPlugin extends Plugin {
 			this.currentSentenceEl = null;
 		}
 		if (this.wordHighlightInterval !== null) {
-			window.clearInterval(this.wordHighlightInterval);
+			window.cancelAnimationFrame(this.wordHighlightInterval);
 			this.wordHighlightInterval = null;
 		}
 	}
@@ -818,6 +907,10 @@ export default class TextToSpeechPlugin extends Plugin {
 			this.speechSynthesis.cancel();
 		}
 		this.clearHighlights();
+		if (this.wordHighlightInterval !== null) {
+			window.cancelAnimationFrame(this.wordHighlightInterval);
+			this.wordHighlightInterval = null;
+		}
 		this.statusBarEl?.remove();
 	}
 
@@ -923,6 +1016,9 @@ export default class TextToSpeechPlugin extends Plugin {
 	private async skipToParagraph(direction: "next" | "previous") {
 		if (!this.speaking) return;
 
+		const oldIndex = this.currentParagraphIndex;
+		console.log(`[Debug] Skipping from paragraph ${oldIndex} ${direction}`);
+
 		// Calculate new index
 		if (direction === "next") {
 			this.currentParagraphIndex = Math.min(
@@ -951,7 +1047,78 @@ export default class TextToSpeechPlugin extends Plugin {
 		return new Promise<void>((resolve) => {
 			const checkSpeechSynthesis = () => {
 				if (!this.speechSynthesis.speaking) {
-					// Start speaking from the new paragraph using the selected service
+					const view =
+						this.app.workspace.getActiveViewOfType(MarkdownView);
+					if (!view) return;
+
+					const editor = view.editor;
+					const text = editor.getValue();
+
+					// Calculate the absolute position of each paragraph
+					let offset = 0;
+					const paragraphPositions: {
+						start: number;
+						end: number;
+						text: string;
+					}[] = [];
+
+					// Split text by paragraphs and track positions
+					const allParagraphs = text.split(/\n\s*\n/);
+					for (let i = 0; i < allParagraphs.length; i++) {
+						const paragraphText = allParagraphs[i];
+						paragraphPositions.push({
+							start: offset,
+							end: offset + paragraphText.length,
+							text: paragraphText,
+						});
+						// Add length of paragraph and the double newline separator
+						offset +=
+							paragraphText.length +
+							(i < allParagraphs.length - 1 ? 2 : 0);
+					}
+
+					// Get the current paragraph's position
+					const currentParagraph =
+						paragraphPositions[this.currentParagraphIndex];
+					if (!currentParagraph) {
+						console.error(
+							"Invalid paragraph index:",
+							this.currentParagraphIndex
+						);
+						return;
+					}
+
+					console.log(`[Debug] Current paragraph position:`, {
+						index: this.currentParagraphIndex,
+						start: currentParagraph.start,
+						end: currentParagraph.end,
+						text: currentParagraph.text.substring(0, 50) + "...",
+					});
+
+					// Start word highlighting for the new paragraph
+					if (
+						this.settings.highlightEnabled &&
+						this.settings.highlightWord
+					) {
+						// Initial highlight of the first word
+						const firstWord = currentParagraph.text.match(/^\S+/);
+						if (firstWord) {
+							this.highlightWord(
+								this.currentParagraphIndex,
+								0,
+								firstWord[0].length,
+								currentParagraph.start
+							);
+						}
+
+						// Start word highlighting for the new paragraph
+						this.startWordHighlighting(
+							currentParagraph.text,
+							currentParagraph.start
+						);
+					}
+
+					// Start speaking from the new paragraph
 					const remainingText = this.paragraphs
 						.slice(this.currentParagraphIndex)
 						.join("\n\n");
@@ -974,6 +1141,144 @@ export default class TextToSpeechPlugin extends Plugin {
 			};
 			checkSpeechSynthesis();
 		});
+	}
+
+	private startWordHighlighting(text: string, paragraphStart: number) {
+		// Clear any existing word highlighting
+		if (this.currentWordEl) {
+			this.currentWordEl.clear();
+		}
+
+		// Store the current paragraph index to ensure it doesn't change during highlighting
+		const currentParagraphIndex = this.currentParagraphIndex;
+
+		// Split text into words and get their exact positions
+		const words: { word: string; start: number; length: number }[] = [];
+		let pos = 0;
+
+		// Process the text character by character to get exact word positions
+		let currentWord = "";
+		let wordStart = 0;
+
+		// Skip leading whitespace
+		while (pos < text.length && /\s/.test(text[pos])) {
+			pos++;
+		}
+		wordStart = pos;
+
+		for (let i = pos; i < text.length; i++) {
+			const char = text[i];
+			if (/\s/.test(char)) {
+				if (currentWord) {
+					words.push({
+						word: currentWord,
+						start: wordStart,
+						length: currentWord.length,
+					});
+					currentWord = "";
+				}
+				// Skip consecutive whitespace
+				while (i + 1 < text.length && /\s/.test(text[i + 1])) {
+					i++;
+				}
+				wordStart = i + 1;
+			} else {
+				currentWord += char;
+			}
+		}
+
+		// Add the last word if exists
+		if (currentWord) {
+			words.push({
+				word: currentWord,
+				start: wordStart,
+				length: currentWord.length,
+			});
+		}
+
+		let currentIndex = 0;
+		let lastTimestamp = 0;
+		let isPaused = false;
+
+		// Clear any existing interval
+		if (this.wordHighlightInterval !== null) {
+			window.cancelAnimationFrame(this.wordHighlightInterval);
+			this.wordHighlightInterval = null;
+		}
+
+		// Calculate average word duration based on text length and playback speed
+		const averageWordDuration =
+			(text.length / words.length) * (60 / this.settings.playbackSpeed);
+
+		// Create an animation frame loop for smoother timing
+		const updateHighlight = (timestamp: number) => {
+			// Check if we're still on the same paragraph
+			if (
+				!this.speaking ||
+				currentIndex >= words.length ||
+				this.currentParagraphIndex !== currentParagraphIndex
+			) {
+				this.wordHighlightInterval = null;
+				return;
+			}
+
+			// Check if audio is paused
+			const isAudioPaused =
+				this.settings.voiceService === "system"
+					? this.speechSynthesis.paused
+					: this.currentAudio?.paused;
+
+			if (isAudioPaused) {
+				// If just paused, store the state
+				if (!isPaused) {
+					isPaused = true;
+					lastTimestamp = timestamp;
+				}
+			} else {
+				// If just resumed, adjust the last timestamp
+				if (isPaused) {
+					isPaused = false;
+					lastTimestamp = timestamp - (timestamp - lastTimestamp);
+				}
+
+				// Only update highlighting if not paused
+				if (
+					!isPaused &&
+					timestamp - lastTimestamp >= averageWordDuration
+				) {
+					const word = words[currentIndex];
+
+					// Calculate the absolute position in the document
+					const absolutePosition = paragraphStart + word.start;
+
+					console.log(`[Debug] Highlighting word in paragraph:`, {
+						paragraphIndex: currentParagraphIndex,
+						paragraphStart,
+						word: word.word,
+						wordStart: word.start,
+						absolutePosition,
+					});
+
+					this.highlightWord(
+						currentParagraphIndex,
+						word.start,
+						word.length,
+						paragraphStart
+					);
+
+					currentIndex++;
+					lastTimestamp = timestamp;
+				}
+			}
+
+			// Continue the animation frame loop
+			this.wordHighlightInterval =
+				window.requestAnimationFrame(updateHighlight);
+		};
+
+		// Start the animation frame loop
+		this.wordHighlightInterval =
+			window.requestAnimationFrame(updateHighlight);
 	}
 
 	async testSelectedVoice() {
@@ -1093,43 +1398,6 @@ export default class TextToSpeechPlugin extends Plugin {
 		const voices = this.speechSynthesis.getVoices();
 		const defaultVoice = voices.find((v) => v.default) || voices[0];
 		return defaultVoice?.voiceURI || "default";
-	}
-
-	private startWordHighlighting(text: string) {
-		const words = text.split(/\s+/);
-		let currentIndex = 0;
-
-		// Clear any existing interval
-		if (this.wordHighlightInterval !== null) {
-			window.clearInterval(this.wordHighlightInterval);
-		}
-
-		// Calculate average word duration based on text length and playback speed
-		const averageWordDuration =
-			(text.length / words.length) * (60 / this.settings.playbackSpeed);
-
-		this.wordHighlightInterval = window.setInterval(() => {
-			if (!this.speaking || currentIndex >= words.length) {
-				if (this.wordHighlightInterval !== null) {
-					window.clearInterval(this.wordHighlightInterval);
-					this.wordHighlightInterval = null;
-				}
-				return;
-			}
-
-			// Find the word's position in the original text
-			let wordStart = 0;
-			for (let i = 0; i < currentIndex; i++) {
-				wordStart += words[i].length + 1; // +1 for the space
-			}
-
-			this.highlightWord(
-				this.currentParagraphIndex,
-				wordStart,
-				words[currentIndex].length
-			);
-			currentIndex++;
-		}, averageWordDuration);
 	}
 }
 
